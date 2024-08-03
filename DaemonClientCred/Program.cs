@@ -2,6 +2,7 @@
 using System;
 using System.Configuration;
 using System.Globalization;
+using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
@@ -15,6 +16,7 @@ namespace DaemonClientCred
         private static readonly string tenant = ConfigurationManager.AppSettings["ida:Tenant"];
         private static readonly string clientId = ConfigurationManager.AppSettings["ida:ClientId"];
         private static readonly string certName = ConfigurationManager.AppSettings["ida:CertName"];
+        private static readonly string storeLocationConfig = ConfigurationManager.AppSettings["ida:StoreLocation"];
         private static readonly string authority = string.Format(CultureInfo.InvariantCulture, aadInstance, tenant);
         private static readonly HttpClient httpClient = new HttpClient();
         private static readonly string audienceUri = ConfigurationManager.AppSettings["ida:AudienceUri"];
@@ -22,19 +24,76 @@ namespace DaemonClientCred
 
         static async Task Main(string[] args)
         {
-            try
+            while (true)
             {
-                var result = await CallAPI();
-                Console.WriteLine($"Here is the result {result}");
+                Console.WriteLine($"Enter command (h = {nameof(GetHistoryData)}, s = {nameof(GetSecurityHistory)}, ho = {nameof(Hello)}, x = {nameof(GetComplexData)}, q = quit):");
+                var command = Console.ReadLine();
+
+                if (command.Equals("q", StringComparison.OrdinalIgnoreCase))
+                {
+                    break;
+                }
+
+                try
+                {
+                    string result;
+                    switch (command)
+                    {
+                        case "s":
+                            result = await GetSecurityHistory();
+                            break;
+                        case "h":
+                            result = await GetHistoryData();
+                            break;
+                        case "ho":
+                            result = await Hello();
+                            break;
+                        case "x":
+                            result = await GetComplexData();
+                            break;
+                        default:
+                            result = "Invalid command";
+                            break;
+                    }
+
+                    Console.WriteLine($"Here is the result: {result}");
+                }
+                catch (Exception ex)
+                {
+                    Console.WriteLine(ex);
+                }
             }
-            catch (Exception ex)
-            {
-                Console.WriteLine(ex);
-            }
-            Console.ReadKey();
         }
 
-        static async Task<string> CallAPI()
+        static async Task<string> GetSecurityHistory()
+        {
+            string xmlContent = await GetFile();
+            return await CallAPI(nameof(GetSecurityHistory), xmlContent);
+        }
+
+        static async Task<string> GetHistoryData()
+        {
+            string xmlContent = await GetFile();
+            return await CallAPI(nameof(GetHistoryData), xmlContent);
+        }
+
+        private static async Task<string> GetFile()
+        {
+            string xmlFilePath = "test.xml";
+            return await ReadXmlFileAsync(xmlFilePath);
+        }
+
+        static async Task<string> Hello()
+        {
+            return await CallAPI(nameof(Hello), null);
+        }
+
+        static async Task<string> GetComplexData()
+        {
+            return await CallAPI(nameof(GetComplexData), null);
+        }
+
+        static async Task<string> CallAPI(string endpoint, string xmlContent)
         {
             var result = await GetAccessTokenWithMSAL(audienceUri);
             if (result == null)
@@ -45,19 +104,31 @@ namespace DaemonClientCred
 
             httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", result.AccessToken);
 
-            // Create the multipart form data content
-            var content = new MultipartFormDataContent();
-
-            // In-memory data
-            byte[] inMemoryData = System.Text.Encoding.UTF8.GetBytes("This is the in-memory data content.");
-            var fileContent = new ByteArrayContent(inMemoryData)
+            HttpContent content;
+            if (xmlContent != null)
             {
-                Headers = { ContentType = new MediaTypeHeaderValue("application/octet-stream") }
-            };
-            content.Add(fileContent, "file", "inMemoryData.txt"); // Replace "file" with the name expected by the API
+                content = new StringContent(xmlContent);
+                content.Headers.ContentType = new MediaTypeHeaderValue("application/xml");
+            }
+            else
+            {
+                // In-memory data for the "hello" and "complexData" endpoints
+                byte[] inMemoryData = System.Text.Encoding.UTF8.GetBytes("test.xml");
+                var fileContent = new ByteArrayContent(inMemoryData)
+                {
+                    Headers = { ContentType = new MediaTypeHeaderValue("application/octet-stream") }
+                };
+                content = new MultipartFormDataContent
+                {
+                    { fileContent, "file", "test.xml" } // Replace "file" with the name expected by the API
+                };
+            }
+
+            var targetfunc = $"{funcAppUrl}api/v1/{endpoint}";
+            Console.WriteLine($"Calling {targetfunc}");
 
             // Send the POST request
-            var response = await httpClient.PostAsync(funcAppUrl, content);
+            var response = await httpClient.PostAsync(targetfunc, content);
             if (response.IsSuccessStatusCode)
             {
                 return await response.Content.ReadAsStringAsync();
@@ -66,6 +137,14 @@ namespace DaemonClientCred
             {
                 Console.WriteLine($"Failed to call func app.\nError:  {response.ReasonPhrase}\n");
                 return null;
+            }
+        }
+
+        private static async Task<string> ReadXmlFileAsync(string filePath)
+        {
+            using (StreamReader reader = new StreamReader(filePath))
+            {
+                return await reader.ReadToEndAsync();
             }
         }
 
@@ -92,7 +171,11 @@ namespace DaemonClientCred
 
         private static X509Certificate2 GetCertificateFromLocalStore(string certName)
         {
-            using (var store = new X509Store(StoreName.My, StoreLocation.CurrentUser))
+            var storeLocation = storeLocationConfig.Equals("LocalMachine", StringComparison.OrdinalIgnoreCase)
+                ? StoreLocation.LocalMachine
+                : StoreLocation.CurrentUser;
+
+            using (var store = new X509Store(StoreName.My, storeLocation))
             {
                 store.Open(OpenFlags.ReadOnly);
                 var certCollection = store.Certificates.Find(X509FindType.FindBySubjectName, certName, false);

@@ -12,6 +12,7 @@ namespace DaemonClientCred
 {
     class Program
     {
+        private const string inputFile = "test.xml";
         private static readonly string aadInstance = ConfigurationManager.AppSettings["ida:AADInstance"];
         private static readonly string tenant = ConfigurationManager.AppSettings["ida:Tenant"];
         private static readonly string clientId = ConfigurationManager.AppSettings["ida:ClientId"];
@@ -26,7 +27,20 @@ namespace DaemonClientCred
         {
             while (true)
             {
-                Console.WriteLine($"Enter command (h = {nameof(GetHistoryData)}, s = {nameof(GetSecurityHistory)}, ho = {nameof(Hello)}, x = {nameof(GetComplexData)}, q = quit):");
+                Console.Write($"{Environment.NewLine}Enter command (h = ");
+                WriteColored(nameof(GetHistoryData), ConsoleColor.Green);
+
+                Console.Write(", s = ");
+                WriteColored(nameof(GetSecurityHistory), ConsoleColor.Green);
+            
+                Console.Write(", x = ");
+                WriteColored(nameof(GetComplexData), ConsoleColor.Green);
+
+                Console.Write(", ho = ");
+                WriteColored(nameof(Hello), ConsoleColor.Green);
+
+                Console.WriteLine(", q = quit) and hit enter:");
+
                 var command = Console.ReadLine();
 
                 if (command.Equals("q", StringComparison.OrdinalIgnoreCase))
@@ -56,7 +70,8 @@ namespace DaemonClientCred
                             break;
                     }
 
-                    Console.WriteLine($"Here is the result: {result}");
+                    WriteColored($"{Environment.NewLine}Here is the result: ", ConsoleColor.Yellow);
+                    Console.WriteLine($"{result}");
                 }
                 catch (Exception ex)
                 {
@@ -67,20 +82,12 @@ namespace DaemonClientCred
 
         static async Task<string> GetSecurityHistory()
         {
-            string xmlContent = await GetFile();
-            return await CallAPI(nameof(GetSecurityHistory), xmlContent);
+            return await CallAPI(nameof(GetSecurityHistory), await ReadXmlFileAsync(inputFile));
         }
 
         static async Task<string> GetHistoryData()
         {
-            string xmlContent = await GetFile();
-            return await CallAPI(nameof(GetHistoryData), xmlContent);
-        }
-
-        private static async Task<string> GetFile()
-        {
-            const string xmlFilePath = "test.xml";
-            return await ReadXmlFileAsync(xmlFilePath);
+            return await CallAPI(nameof(GetHistoryData), await ReadXmlFileAsync(inputFile));
         }
 
         static async Task<string> Hello()
@@ -90,7 +97,7 @@ namespace DaemonClientCred
 
         static async Task<string> GetComplexData()
         {
-            return await CallAPI(nameof(GetComplexData), null);
+            return await CallAPI(nameof(GetComplexData), await ReadXmlFileAsync(inputFile));
         }
 
         static async Task<string> CallAPI(string endpoint, string xmlContent)
@@ -98,7 +105,7 @@ namespace DaemonClientCred
             var result = await GetAccessTokenWithMSAL(audienceUri);
             if (result == null)
             {
-                Console.WriteLine("Canceling attempt to call func app.\n");
+                Console.WriteLine($"Canceling attempt to call func app.{Environment.NewLine}");
                 return null;
             }
 
@@ -113,19 +120,16 @@ namespace DaemonClientCred
             else
             {
                 // In-memory data for the "hello" and "complexData" endpoints
-                byte[] inMemoryData = System.Text.Encoding.UTF8.GetBytes("test.xml");
+                byte[] inMemoryData = System.Text.Encoding.UTF8.GetBytes(inputFile);
                 var fileContent = new ByteArrayContent(inMemoryData)
                 {
                     Headers = { ContentType = new MediaTypeHeaderValue("application/octet-stream") }
                 };
-                content = new MultipartFormDataContent
-        {
-            { fileContent, "file", "test.xml" } // Replace "file" with the name expected by the API
-        };
+                content = new MultipartFormDataContent { { fileContent, "file", inputFile } };
             }
 
             var targetfunc = string.Concat(funcAppUrl, "api/v1/", endpoint);
-            Console.WriteLine($"Calling {targetfunc}");
+            Console.WriteLine($"{Environment.NewLine}Calling: {targetfunc}");
 
             // Send the POST request
             var response = await httpClient.PostAsync(targetfunc, content);
@@ -135,7 +139,7 @@ namespace DaemonClientCred
             }
             else
             {
-                Console.WriteLine($"Failed to call func app.\nError:  {response.ReasonPhrase}\n");
+                Console.WriteLine($"Failed to call func app.{Environment.NewLine}Error:  {response.ReasonPhrase}\n");
                 return null;
             }
         }
@@ -166,7 +170,7 @@ namespace DaemonClientCred
             string[] scopes = new string[] { $"{resourceId}/.default" };
 
             var result = await app.AcquireTokenForClient(scopes).ExecuteAsync();
-            Console.WriteLine($"Aquired token: \n{result.AccessToken}");
+            Console.WriteLine($"{Environment.NewLine}Aquired token: {Environment.NewLine}{result.AccessToken}");
             return result;
         }
 
@@ -190,6 +194,13 @@ namespace DaemonClientCred
                     return null;
                 }
             }
+        }
+
+        private static void WriteColored(string text, ConsoleColor color)
+        {
+            Console.ForegroundColor = color;
+            Console.Write(text);
+            Console.ResetColor();
         }
     }
 }

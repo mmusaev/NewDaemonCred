@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "DaemonClientCred": {
+      "commandName": "Project",
+      "environmentVariables": {
+        "ENVIRONMENT": "localDev"
+      }
+    }
+  }
+}

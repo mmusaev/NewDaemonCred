@@ -1,29 +1,60 @@
 ﻿using Microsoft.Identity.Client;
 using System;
-using System.Configuration;
 using System.Globalization;
 using System.IO;
 using System.Net.Http;
 using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
+using Microsoft.Extensions.Configuration;
 
 namespace DaemonClientCred
 {
     class Program
     {
         private const string inputFile = "test.xml";
-        private static readonly string aadInstance = ConfigurationManager.AppSettings["ida:AADInstance"];
-        private static readonly string tenant = ConfigurationManager.AppSettings["ida:Tenant"];
-        private static readonly string clientId = ConfigurationManager.AppSettings["ida:ClientId"];
-        private static readonly string certName = ConfigurationManager.AppSettings["ida:CertName"];
-        private static readonly string storeLocationConfig = ConfigurationManager.AppSettings["ida:StoreLocation"];
-        private static readonly string authority = string.Format(CultureInfo.InvariantCulture, aadInstance, tenant);
+        private static IConfiguration configuration;
         private static readonly HttpClient httpClient = new HttpClient();
-        private static readonly string audienceUri = ConfigurationManager.AppSettings["ida:AudienceUri"];
-        private static readonly string funcAppUrl = ConfigurationManager.AppSettings["ida:FunctionUrl"];
+        private static string aadInstance;
+        private static string tenant;
+        private static string clientId;
+        private static string certName;
+        private static string storeLocationConfig;
+        private static string authority;
+        private static string audienceUri;
+        private static string funcAppUrl;
 
-        static async Task Main(string[] args)
+        static async Task Main()
+        {
+            // Set up configuration sources
+            var environment = Environment.GetEnvironmentVariable("ENVIRONMENT") ?? "Production";
+
+            configuration = new ConfigurationBuilder()
+                .SetBasePath(Directory.GetCurrentDirectory())
+                .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
+                .AddJsonFile($"appsettings.{environment}.json", optional: true, reloadOnChange: true)
+                .Build();
+
+            // Initialize configuration values
+            InitializeConfigurationValues();
+
+            await ProcessCommands();
+        }
+
+        private static void InitializeConfigurationValues()
+        {
+            aadInstance = configuration["AzureAd:AADInstance"];
+            tenant = configuration["AzureAd:Tenant"];
+            clientId = configuration["AzureAd:ClientId"];
+            authority = string.Format(CultureInfo.InvariantCulture, aadInstance, tenant);
+            audienceUri = configuration["AzureAd:AudienceUri"];
+            funcAppUrl = configuration["AzureAd:FunctionUrl"];
+
+            certName = configuration["CertName"];
+            storeLocationConfig = configuration["StoreLocation"];
+        }
+
+        private static async Task ProcessCommands()
         {
             while (true)
             {
@@ -32,7 +63,7 @@ namespace DaemonClientCred
 
                 Console.Write(", s = ");
                 WriteColored(nameof(GetSecurityHistory), ConsoleColor.Green);
-            
+
                 Console.Write(", x = ");
                 WriteColored(nameof(GetComplexData), ConsoleColor.Green);
 
@@ -71,7 +102,7 @@ namespace DaemonClientCred
                     }
 
                     WriteColored($"{Environment.NewLine}Here is the result: ", ConsoleColor.Yellow);
-                    Console.WriteLine($"{result}");
+                    Console.WriteLine(result);
                 }
                 catch (Exception ex)
                 {
@@ -79,7 +110,7 @@ namespace DaemonClientCred
                 }
             }
         }
-
+        
         static async Task<string> GetSecurityHistory()
         {
             return await CallAPI(nameof(GetSecurityHistory), await ReadXmlFileAsync(inputFile));
@@ -143,7 +174,6 @@ namespace DaemonClientCred
                 return null;
             }
         }
-
 
         private static async Task<string> ReadXmlFileAsync(string filePath)
         {

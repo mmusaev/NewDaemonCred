@@ -1,4 +1,5 @@
-﻿using Microsoft.Identity.Client;
+﻿using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Identity.Client;
 using System;
 using System.Globalization;
 using System.IO;
@@ -7,6 +8,8 @@ using System.Net.Http.Headers;
 using System.Security.Cryptography.X509Certificates;
 using System.Threading.Tasks;
 using Microsoft.Extensions.Configuration;
+using Polly;
+using Polly.Retry;
 
 namespace DaemonClientCred
 {
@@ -14,7 +17,7 @@ namespace DaemonClientCred
     {
         private const string inputFile = "test.xml";
         private static IConfiguration configuration;
-        private static readonly HttpClient httpClient = new HttpClient();
+        private static IServiceProvider serviceProvider;
         private static string aadInstance;
         private static string tenant;
         private static string clientId;
@@ -23,6 +26,11 @@ namespace DaemonClientCred
         private static string authority;
         private static string audienceUri;
         private static string funcAppUrl;
+        private static int retryCount;
+        private static int retryBaseDelaySeconds;
+
+        // Define a Polly retry policy
+        private static AsyncRetryPolicy<HttpResponseMessage> httpRetryPolicy;
 
         static async Task Main()
         {
@@ -38,7 +46,24 @@ namespace DaemonClientCred
             // Initialize configuration values
             InitializeConfigurationValues();
 
+            // Initialize retry policy
+            InitializeRetryPolicy();
+
+            // Set up dependency injection
+            var serviceCollection = new ServiceCollection();
+            ConfigureServices(serviceCollection);
+            serviceProvider = serviceCollection.BuildServiceProvider();
+
             await ProcessCommands();
+        }
+
+
+        private static void ConfigureServices(IServiceCollection services)
+        {
+            services.AddHttpClient("defaultClient")
+                .AddPolicyHandler(httpRetryPolicy);
+
+            services.AddSingleton(configuration);
         }
 
         private static void InitializeConfigurationValues()
@@ -52,7 +77,18 @@ namespace DaemonClientCred
 
             certName = configuration["CertName"];
             storeLocationConfig = configuration["StoreLocation"];
+
+            retryCount = int.Parse(configuration["RetryPolicy:RetryCount"]);
+            retryBaseDelaySeconds = int.Parse(configuration["RetryPolicy:RetryBaseDelaySeconds"]);
         }
+
+        private static void InitializeRetryPolicy()
+        {
+            httpRetryPolicy = Policy
+                .HandleResult<HttpResponseMessage>(r => !r.IsSuccessStatusCode)
+                .WaitAndRetryAsync(retryCount, retryAttempt => TimeSpan.FromSeconds(Math.Pow(retryBaseDelaySeconds, retryAttempt)));
+        }
+
 
         private static async Task ProcessCommands()
         {
@@ -110,7 +146,7 @@ namespace DaemonClientCred
                 }
             }
         }
-        
+
         static async Task<string> GetSecurityHistory()
         {
             return await CallAPI(nameof(GetSecurityHistory), await ReadXmlFileAsync(inputFile));
@@ -140,6 +176,9 @@ namespace DaemonClientCred
                 return null;
             }
 
+            var httpClientFactory = serviceProvider.GetRequiredService<IHttpClientFactory>();
+            var httpClient = httpClientFactory.CreateClient("defaultClient");
+
             httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", result.AccessToken);
 
             HttpContent content;
@@ -162,7 +201,7 @@ namespace DaemonClientCred
             var targetfunc = string.Concat(funcAppUrl, "api/v1/", endpoint);
             Console.WriteLine($"{Environment.NewLine}Calling: {targetfunc}");
 
-            // Send the POST request
+            // Send the POST request with retry policy
             var response = await httpClient.PostAsync(targetfunc, content);
             if (response.IsSuccessStatusCode)
             {
@@ -199,7 +238,12 @@ namespace DaemonClientCred
 
             string[] scopes = new string[] { $"{resourceId}/.default" };
 
-            var result = await app.AcquireTokenForClient(scopes).ExecuteAsync();
+            // Retry policy for token acquisition
+            var tokenRetryPolicy = Policy
+                .Handle<MsalServiceException>()
+                .WaitAndRetryAsync(retryCount, retryAttempt => TimeSpan.FromSeconds(Math.Pow(retryBaseDelaySeconds, retryAttempt)));
+
+            var result = await tokenRetryPolicy.ExecuteAsync(() => app.AcquireTokenForClient(scopes).ExecuteAsync());
             Console.WriteLine($"{Environment.NewLine}Aquired token: {Environment.NewLine}{result.AccessToken}");
             return result;
         }
